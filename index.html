@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>GAME BAGUS 3.1</title>
+<style>
+*{box-sizing:border-box}
+html,body{
+ margin:0;width:100%;height:100%;overflow:hidden;
+ background:#83c9f5;font-family:Arial;
+ touch-action:none;user-select:none
+}
+canvas{display:block}
+#hud{
+ position:absolute;top:12px;left:12px;
+ color:white;font-weight:bold;font-size:15px;
+ text-shadow:2px 2px 4px black;z-index:5;line-height:1.6
+}
+#hud span{color:#ffdc48}
+#brand{
+ position:absolute;top:12px;right:12px;
+ color:white;font-weight:bold;text-shadow:2px 2px 4px black
+}
+#audioBtn{
+ position:absolute;top:42px;right:10px;z-index:8;
+ padding:9px;font-size:12px
+}
+#hint{
+ position:absolute;bottom:20px;width:100%;
+ text-align:center;color:white;font-size:12px;
+ text-shadow:1px 2px 4px black
+}
+#menu{
+ position:absolute;inset:0;z-index:10;
+ display:none;align-items:center;justify-content:center;
+ background:#0009;color:white;text-align:center
+}
+#panel{
+ width:90%;max-width:390px;max-height:88vh;
+ overflow:auto;padding:20px 15px;border-radius:20px;
+ background:linear-gradient(145deg,#183b60,#071827)
+}
+h1{color:#ffcf39}
+button{
+ border:0;border-radius:12px;padding:13px 20px;
+ margin:5px;background:linear-gradient(#ffe36b,#ff9f00);
+ font-weight:bold;font-size:15px
+}
+.secondary{background:linear-gradient(#d9eaff,#719acb)}
+.carCard{
+ background:#ffffff18;border:1px solid #ffffff44;
+ border-radius:12px;padding:8px;margin:8px
+}
+#loading{
+ position:absolute;inset:0;z-index:20;
+ display:flex;align-items:center;justify-content:center;
+ text-align:center;background:#83c9f5;color:white;
+ font-weight:bold;padding:20px
+}
+</style>
+</head>
+<body>
+
+<div id="loading">MEMUAT GAME BAGUS 3.1...</div>
+
+<div id="hud">
+ SKOR: <span id="score">0</span><br>
+ SPEED: <span id="speed">30</span><br>
+ 🪙 <span id="coins">0</span>
+</div>
+
+<div id="brand">GAME BAGUS 3.1</div>
+<button id="audioBtn">🔊 AUDIO ON</button>
+<div id="hint">SENTUH KIRI / KANAN UNTUK BERPINDAH JALUR</div>
+
+<div id="menu">
+ <div id="panel"></div>
+</div>
+
+<script type="module">
+
+// THREE.JS
+let THREE;
+
+try{
+ THREE=await import(
+ "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+ );
+}catch(e){
+ document.getElementById("loading").innerHTML=
+ "GAGAL MEMUAT GAME<br><br>Periksa internet dan muat ulang halaman.";
+ throw e;
+}
+
+// DATA MOBIL
+const carsData=[
+ {name:"Blue Starter",color:0x087cff,price:0},
+ {name:"Red Racer",color:0xe52d35,price:100},
+ {name:"Yellow Speed",color:0xffc928,price:200},
+ {name:"Black Shadow",color:0x252c38,price:350},
+ {name:"Golden King",color:0xffc000,price:500}
+];
+
+let coins=Number(localStorage.getItem("gb_coins")||0);
+let owned=JSON.parse(localStorage.getItem("gb_owned")||"[0]");
+let selected=Number(localStorage.getItem("gb_selected")||0);
+
+if(!Array.isArray(owned))owned=[0];
+if(!owned.includes(0))owned.push(0);
+if(!carsData[selected]||!owned.includes(selected))selected=0;
+
+function save(){
+ localStorage.setItem("gb_coins",coins);
+ localStorage.setItem("gb_owned",JSON.stringify(owned));
+ localStorage.setItem("gb_selected",selected);
+}
+
+// AUDIO
+let audioOn=true;
+const bgm=new Audio("./audio/music.mp3");
+const engine=new Audio("./audio/engine.mp3");
+const passSound=new Audio("./audio/pass.mp3");
+const crashSound=new Audio("./audio/crash.mp3");
+
+bgm.loop=true;
+engine.loop=true;
+bgm.volume=.25;
+engine.volume=.18;
+
+function play(s){
+ if(!audioOn)return;
+ s.currentTime=0;
+ s.play().catch(()=>{});
+}
+function stop(s){
+ s.pause();s.currentTime=0;
+}
+function stopAudio(){
+ stop(bgm);stop(engine);stop(passSound);
+}
+
+audioBtn.onclick=()=>{
+ audioOn=!audioOn;
+ audioBtn.textContent=audioOn?"🔊 AUDIO ON":"🔇 AUDIO OFF";
+ if(!audioOn)stopAudio();
+ else if(running){play(bgm);play(engine)}
+};
+
+// SCENE
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x83c9f5);
+scene.fog=new THREE.Fog(0x83c9f5,65,190);
+
+scene.add(new THREE.HemisphereLight(0xffffff,0x536b42,2));
+
+const sun=new THREE.DirectionalLight(0xffffff,1.5);
+sun.position.set(-25,45,30);
+scene.add(sun);
+
+const camera=new THREE.PerspectiveCamera(
+ 68,innerWidth/innerHeight,.1,250
+);
+camera.position.set(0,5.2,16);
+camera.lookAt(0,1,-20);
+
+const renderer=new THREE.WebGLRenderer({
+ antialias:false,powerPreference:"low-power"
+});
+renderer.setSize(innerWidth,innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio,1));
+document.body.appendChild(renderer.domElement);
+
+// MATERIAL
+function mat(c){
+ return new THREE.MeshLambertMaterial({color:c});
+}
+function box(parent,w,h,d,c,x,y,z){
+ const m=new THREE.Mesh(
+  new THREE.BoxGeometry(w,h,d),
+  typeof c==="number"?mat(c):c
+ );
+ m.position.set(x,y,z);
+ parent.add(m);
+ return m;
+}
+
+// JALAN
+const ground=new THREE.Mesh(
+ new THREE.PlaneGeometry(180,260),mat(0x398b43)
+);
+ground.rotation.x=-Math.PI/2;
+ground.position.set(0,-.15,-90);
+scene.add(ground);
+
+const road=new THREE.Mesh(
+ new THREE.PlaneGeometry(13,260),mat(0x292d34)
+);
+road.rotation.x=-Math.PI/2;
+road.position.set(0,0,-90);
+scene.add(road);
+
+for(const x of [-6.7,6.7]){
+ box(scene,.22,.13,260,0xffffff,x,.08,-90);
+ box(scene,.12,.06,260,0xffd83c,x,.16,-90);
+}
+
+const markings=[];
+for(const x of [-3,0,3]){
+ for(let z=-220;z<15;z+=13){
+  markings.push(box(scene,.1,.035,5,0xffffff,x,.035,z));
+ }
+}
+
+// LINGKUNGAN
+const decorations=[];
+
+function tree(x,z){
+ const g=new THREE.Group();
+
+ const trunk=new THREE.Mesh(
+  new THREE.CylinderGeometry(.18,.25,1.8,6),mat(0x765035)
+ );
+ trunk.position.y=.9;
+ g.add(trunk);
+
+ const leaves=new THREE.Mesh(
+  new THREE.ConeGeometry(1.15,2.5,7),mat(0x176b35)
+ );
+ leaves.position.y=2.7;
+ g.add(leaves);
+
+ g.position.set(x,0,z);
+ scene.add(g);
+ decorations.push(g);
+}
+
+function building(x,z){
+ const g=new THREE.Group();
+ const h=7+Math.random()*7;
+
+ const b=new THREE.Mesh(
+  new THREE.BoxGeometry(4,h,5),
+  mat([0x71859c,0x9b9b9b,0x667d91][Math.floor(Math.random()*3)])
+ );
+ b.position.y=h/2;
+ g.add(b);
+ g.position.set(x,0,z);
+ scene.add(g);
+ decorations.push(g);
+}
+
+for(let z=-200;z<15;z+=38){
+ tree(-10,z);
+ tree(10,z-15);
+}
+for(let z=-180;z<0;z+=65){
+ building(-17,z);
+ building(17,z-25);
+}
+
+// MOBIL
+function makeCar(color,model=0){
+ const g=new THREE.Group();
+ const body=mat(color);
+ const glass=mat(0x8bdcff);
+ const dark=mat(0x151a20);
+
+ const sports=model===2;
+ const muscle=model===3;
+ const gold=model===4;
+
+ const w=gold?1.85:1.7;
+ const l=sports||gold?3.7:3.4;
+
+ box(g,w,.58,l,body,0,.72,0);
+
+ if(sports){
+  box(g,1.35,.55,1.65,body,0,1.18,0);
+  box(g,1.18,.36,.06,glass,0,1.27,-.83);
+  box(g,1.18,.36,.06,glass,0,1.27,.83);
+  box(g,1.75,.1,.22,dark,0,1.12,1.6);
+  box(g,.1,.38,.1,dark,-.6,.95,1.6);
+  box(g,.1,.38,.1,dark,.6,.95,1.6);
+ }else if(gold){
+  box(g,1.48,.55,1.7,body,0,1.18,0);
+  box(g,1.3,.36,.06,glass,0,1.28,-.85);
+  box(g,1.3,.36,.06,glass,0,1.28,.85);
+  box(g,1.9,.12,.3,0xffdf55,0,1.25,1.7);
+ }else{
+  box(g,1.35,.65,1.65,body,0,1.25,0);
+  box(g,1.15,.42,.06,glass,0,1.35,-.84);
+  box(g,1.15,.42,.06,glass,0,1.35,.84);
+  if(muscle)box(g,.45,.12,1.1,dark,0,1.04,-1.05);
+ }
+
+ box(g,w+.08,.18,.18,dark,0,.48,-l/2-.06);
+ box(g,w+.08,.18,.18,dark,0,.48,l/2+.06);
+
+ const wheelGeo=new THREE.CylinderGeometry(.32,.32,.24,10);
+ for(const x of [-w/2-.06,w/2+.06]){
+  for(const z of [-1.05,1.05]){
+   const wheel=new THREE.Mesh(wheelGeo,dark);
+   wheel.rotation.z=Math.PI/2;
+   wheel.position.set(x,.4,z);
+   g.add(wheel);
+  }
+ }
+
+ for(const x of [-.52,.52]){
+  box(g,.32,.16,.07,0xfff2bb,x,.72,-l/2-.12);
+  box(g,.32,.16,.07,0xff2222,x,.72,l/2+.12);
+ }
+ return g;
+}
+
+// TRUK
+function makeTruck(){
+ const g=new THREE.Group();
+ const colors=[0xe52d35,0xffc928,0xeeeeee,0x2583c9,0x21a477];
+ const color=colors[Math.floor(Math.random()*colors.length)];
+
+ box(g,1.9,1.65,2.4,0xbfc8d2,0,2,-.85);
+ box(g,1.9,1.6,1.45,color,0,1.45,1.05);
+ box(g,1.4,.58,.06,0x83dfff,0,1.85,1.79);
+ box(g,2,.22,.2,0x252525,0,.5,1.85);
+
+ const wheelGeo=new THREE.CylinderGeometry(.38,.38,.28,9);
+ for(const x of [-1,1]){
+  for(const z of [-1.4,1.25]){
+   const wheel=new THREE.Mesh(wheelGeo,mat(0x151515));
+   wheel.rotation.z=Math.PI/2;
+   wheel.position.set(x,.38,z);
+   g.add(wheel);
+  }
+ }
+ return g;
+}
+
+// PEMAIN
+const lanes=[-4.5,-1.5,1.5,4.5];
+let player=makeCar(carsData[selected].color,selected);
+player.position.set(-1.5,0,5);
+scene.add(player);
+
+let targetLane=1;
+let traffic=[];
+let running=false;
+let crashing=false;
+let crashTimer=0;
+let score=0;
+let speed=30;
+let spawnTimer=0;
+let lastTime=0;
+let particles=[];
+
+// MENU
+function updatePlayer(){
+ scene.remove(player);
+ player=makeCar(carsData[selected].color,selected);
+ player.position.set(lanes[targetLane],0,5);
+ scene.add(player);
+}
+
+function showMenu(){
+ menu.style.display="flex";
+ panel.innerHTML=`
+ <h1>GAME BAGUS</h1>
+ <p>Hindari kendaraan dan bertahan selama mungkin!</p>
+ <p>🚗 4 JALUR • 3D TRAFFIC RUSH</p>
+ <h3>🪙 KOIN: ${coins}</h3>
+ <button id="startBtn">MULAI</button>
+ <button id="garageBtn" class="secondary">🚘 GARASI</button>
+ `;
+ document.getElementById("startBtn").onclick=startGame;
+ document.getElementById("garageBtn").onclick=openGarage;
+}
+
+function openGarage(){
+ running=false;
+ stopAudio();
+ hint.style.display="none";
+ menu.style.display="flex";
+
+ let html=`<h1>🚘 GARASI</h1><h3>🪙 KOIN: ${coins}</h3>`;
+
+ carsData.forEach((car,i)=>{
+  html+=`
+  <div class="carCard">
+   <h3>${car.name}</h3>
+   <p>${car.price===0?"GRATIS":"🪙 "+car.price+" KOIN"}</p>
+   ${
+    selected===i?"<button disabled>DIPAKAI</button>":
+    owned.includes(i)?
+    '<button onclick="selectCar('+i+')">PILIH</button>':
+    '<button onclick="buyCar('+i+')">BELI</button>'
+   }
+  </div>`;
+ });
+
+ html+=`<button class="secondary" onclick="backMenu()">KEMBALI</button>`;
+ panel.innerHTML=html;
+}
+
+window.buyCar=function(i){
+ if(owned.includes(i))return;
+ if(coins<carsData[i].price){
+  alert("Koin belum cukup!");
+  return;
+ }
+ coins-=carsData[i].price;
+ owned.push(i);
+ save();
+ openGarage();
+};
+
+window.selectCar=function(i){
+ if(!owned.includes(i))return;
+ selected=i;
+ save();
+ updatePlayer();
+ openGarage();
+};
+
+window.backMenu=showMenu;
+
+// KENDARAAN AI
+function spawnCar(lane){
+ if(traffic.some(c=>c.lane===lane&&c.mesh.position.z < -65))return;
+
+ const opposite=lane>=2;
+ const r=Math.random();
+ const type=r<.18?"truck":r<.43?"sport":"normal";
+
+ const colors=[0xe52d35,0xffc928,0xf1f1f1,0x252c38,0x00a889,0xff792d];
+ const color=colors[Math.floor(Math.random()*colors.length)];
+
+ const car=type==="truck"?makeTruck():makeCar(color,type==="sport"?2:0);
+
+ if(opposite)car.rotation.y=Math.PI;
+ car.position.set(lanes[lane],0,-125);
+ scene.add(car);
+
+ traffic.push({mesh:car,lane,opposite,type,passed:false});
+}
+
+function spawnWave(){
+ const amount=Math.min(3,1+Math.floor(score/180));
+ const chosen=[0,1,2,3].sort(()=>Math.random()-.5);
+ for(let i=0;i<amount;i++)spawnCar(chosen[i]);
+}
+
+function clearTraffic(){
+ for(const c of traffic)scene.remove(c.mesh);
+ traffic=[];
+}
+
+// KONTROL
+function left(){
+ if(running)targetLane=Math.max(0,targetLane-1);
+}
+function right(){
+ if(running)targetLane=Math.min(3,targetLane+1);
+}
+
+let sx=0,sy=0;
+
+renderer.domElement.addEventListener("pointerdown",e=>{
+ if(!running)return;
+ sx=e.clientX;sy=e.clientY;
+});
+
+renderer.domElement.addEventListener("pointerup",e=>{
+ if(!running)return;
+ const dx=e.clientX-sx;
+ const dy=e.clientY-sy;
+ if(Math.abs(dx)>30){
+  dx<0?left():right();
+ }else if(Math.abs(dy)<45){
+  e.clientX<innerWidth/2?left():right();
+ }
+});
+
+window.addEventListener("keydown",e=>{
+ if(e.key==="ArrowLeft")left();
+ if(e.key==="ArrowRight")right();
+});
+
+// TABRAKAN
+function crash(){
+ if(crashing||!running)return;
+ running=false;
+ crashing=true;
+ crashTimer=0;
+ stopAudio();
+ play(crashSound);
+
+ for(let i=0;i<12;i++){
+  const p=new THREE.Mesh(
+   new THREE.SphereGeometry(.1,5,5),
+   new THREE.MeshBasicMaterial({color:0xffaa00})
+  );
+  p.position.set(player.position.x,.8,player.position.z);
+  scene.add(p);
+  particles.push({
+   mesh:p,vx:(Math.random()-.5)*7,
+   vy:Math.random()*6,vz:(Math.random()-.5)*7,
+   life:.65
+  });
+ }
+}
+
+function updateCrash(dt){
+ crashTimer+=dt;
+ player.position.y=Math.sin(crashTimer*18)*.15+crashTimer;
+ player.rotation.z=THREE.MathUtils.damp(
+  player.rotation.z,.7,7,dt
+ );
+
+ for(let i=particles.length-1;i>=0;i--){
+  const p=particles[i];
+  p.life-=dt;
+  p.vy-=10*dt;
+  p.mesh.position.x+=p.vx*dt;
+  p.mesh.position.y+=p.vy*dt;
+  p.mesh.position.z+=p.vz*dt;
+  if(p.life<=0){
+   scene.remove(p.mesh);
+   particles.splice(i,1);
+  }
+ }
+
+ if(crashTimer>.8){
+  crashing=false;
+  showGameOver();
+ }
+}
+
+// GAME OVER
+function showGameOver(){
+ menu.style.display="flex";
+ hint.style.display="none";
+
+ const reward=Math.max(5,Math.floor(score/10));
+ coins+=reward;
+ save();
+
+ panel.innerHTML=`
+ <h1>GAME OVER</h1>
+ <h2>SKOR: ${Math.floor(score)}</h2>
+ <h2>🪙 +${reward} KOIN</h2>
+ <p>Total koin: ${coins}</p>
+ <button id="restartBtn">MAIN LAGI</button>
+ <button id="garageBtn" class="secondary">GARASI</button>
+ `;
+
+ document.getElementById("restartBtn").onclick=startGame;
+ document.getElementById("garageBtn").onclick=openGarage;
+}
+
+// MULAI
+function startGame(){
+ clearTraffic();
+ for(const p of particles)scene.remove(p.mesh);
+ particles=[];
+
+ crashing=false;
+ crashTimer=0;
+ targetLane=1;
+ updatePlayer();
+
+ score=0;
+ speed=30;
+ spawnTimer=0;
+
+ player.position.set(lanes[targetLane],0,5);
+ player.rotation.set(0,0,0);
+
+ camera.position.set(0,5.2,16);
+ camera.lookAt(0,1,-20);
+
+ running=true;
+ document.getElementById("score").textContent=0;
+ document.getElementById("speed").textContent=30;
+
+ menu.style.display="none";
+ hint.style.display="block";
+
+ if(audioOn){play(bgm);play(engine)}
+}
+
+// GAME LOOP
+function animate(time){
+ requestAnimationFrame(animate);
+
+ const dt=Math.min((time-lastTime)/1000,.04);
+ lastTime=time;
+
+ if(running){
+  score+=dt*10;
+  speed=Math.min(110,30+score*.14);
+
+  document.getElementById("score").textContent=Math.floor(score);
+  document.getElementById("speed").textContent=Math.floor(speed);
+
+  const desired=lanes[targetLane];
+
+  player.position.x=THREE.MathUtils.damp(
+   player.position.x,desired,11,dt
+  );
+
+  player.rotation.z=THREE.MathUtils.damp(
+   player.rotation.z,(desired-player.position.x)*-.025,8,dt
+  );
+
+  for(const m of markings){
+   m.position.z+=speed*dt;
+   if(m.position.z>15)m.position.z-=234;
+  }
+
+  for(const d of decorations){
+   d.position.z+=speed*dt;
+   if(d.position.z>20)d.position.z-=230;
+  }
+
+  spawnTimer+=dt;
+  if(spawnTimer>=Math.max(.65,1.5-score/600)){
+   spawnWave();
+   spawnTimer=0;
+  }
+
+  for(let i=traffic.length-1;i>=0;i--){
+   const c=traffic[i];
+
+   const carSpeed=c.opposite?
+    speed+Math.min(40,15+score*.025):
+    Math.max(12,speed*.55);
+
+   c.mesh.position.z+=carSpeed*dt;
+
+   const dx=Math.abs(c.mesh.position.x-player.position.x);
+   const dz=Math.abs(c.mesh.position.z-player.position.z);
+
+   const width=c.type==="truck"?1.55:1.35;
+   const depth=c.type==="truck"?2.5:2.2;
+
+   if(dx<width&&dz<depth){
+    crash();
+    break;
+   }
+
+   if(!c.passed&&c.mesh.position.z>8){
+    c.passed=true;
+    play(passSound);
+   }
+
+   if(c.mesh.position.z>22){
+    scene.remove(c.mesh);
+    traffic.splice(i,1);
+   }
+  }
+
+  camera.position.x=THREE.MathUtils.damp(
+   camera.position.x,player.position.x*.1,2.5,dt
+  );
+  camera.lookAt(player.position.x*.06,.8,-20);
+ }
+
+ if(crashing)updateCrash(dt);
+
+ renderer.render(scene,camera);
+}
+
+// UKURAN LAYAR
+window.addEventListener("resize",()=>{
+ camera.aspect=innerWidth/innerHeight;
+ camera.updateProjectionMatrix();
+ renderer.setSize(innerWidth,innerHeight);
+ renderer.setPixelRatio(Math.min(devicePixelRatio,1));
+});
+
+// AWAL
+document.getElementById("coins").textContent=coins;
+showMenu();
+document.getElementById("loading").style.display="none";
+requestAnimationFrame(animate);
+
+</script>
+</body>
+</html>
